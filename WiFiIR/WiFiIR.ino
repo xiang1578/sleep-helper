@@ -1,35 +1,49 @@
+#include <Arduino.h>
 #include <M5Stack.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <WiFiClient.h>
 #include "WebServer.h"
-#include <Preferences.h>
-#include <Arduino.h>
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
-#include <Adafruit_NeoPixel.h>
-#include <stdio.h>
+#include <IRrecv.h>
+#include <IRac.h>
+#include <IRtext.h>
+#include <IRutils.h>
 #include "DHT12.h"
-#include <Wire.h> //The DHT12 uses I2C comunication.
+#include <Wire.h>
+#include <Adafruit_NeoPixel.h>
 #include "Adafruit_Sensor.h"
 #include <Adafruit_BMP280.h>
 
+//------------------RGB相关--------------------//
 #define RGBPIN 15
 #define PIXELNUM 10
 Adafruit_NeoPixel pixels = Adafruit_NeoPixel(PIXELNUM, RGBPIN, NEO_GRB + NEO_KHZ800);
 
+//------------------WiFi相关--------------------//
 const IPAddress apIP(192, 168, 4, 1);
 const char* apSSID = "M5STACK_SETUP";
 boolean settingMode;
 String ssidList;
 String wifi_ssid;
 String wifi_password;
+WebServer webServer(80);
 
+//------------------自动模式相关--------------------//
 boolean autoMode;
 int autoState;
 
-const uint16_t kIrLed = 26;  // ESP8266 GPIO pin to use. Recommended: 4 (D2).
-IRsend irsend(kIrLed);  // Set the GPIO to be used to sending the message.
+//------------------红外相关--------------------//
+const uint16_t kRecvPin = 36;
+const uint16_t kIrLed = 26;
+const uint16_t kCaptureBufferSize = 1024;
+const uint8_t kTimeout = 15;
+const uint16_t kMinUnknownSize = 12;
+IRsend irsend(kIrLed);
+IRrecv irrecv(kRecvPin, kCaptureBufferSize, kTimeout, true);
+decode_results results;
 uint16_t powerOnData[73] = {9000, 4500,  670, 540,  670, 540,  670, 540,  
                             670, 1600,  670, 540,  670, 540,  670, 540,  
                             670, 540,  670, 1600,  670, 540,  670, 540,  
@@ -49,30 +63,38 @@ uint16_t powerOffData[73] = {9000, 4500,  670, 540,  670, 540,  670, 540,
                               670, 540, 670, 1600,  670, 540,  670, 1600,  
                               670, 540,  670, 540,  670, 1600,  670, 540,  670};
 
-DHT12 dht12; //Preset scale CELSIUS and ID 0x5c.
+//------------------红外学习相关--------------------//
+boolean studyIR;
+boolean studying;
+uint16_t irNum;  //已学习功能数
+
+//------------------ENV Unit相关--------------------//
+DHT12 dht12;
 Adafruit_BMP280 bme;
 
-// DNSServer dnsServer;
-WebServer webServer(80);
-
-// wifi config store
 Preferences preferences;
 
+//-----------------主程序--------------------//
 void setup() {
   M5.begin();
   irsend.begin();
+#if DECODE_HASH
+  irrecv.setUnknownThreshold(kMinUnknownSize);
+#endif
+  irrecv.enableIRIn();
   pixels.begin();
   Wire.begin();
   preferences.begin("wifi-config");
 
   M5.Power.begin();
-#if ESP8266
-  Serial.begin(115200, SERIAL_8N1, SERIAL_TX_ONLY);
-#else  // ESP8266
-  Serial.begin(115200, SERIAL_8N1);
-#endif  // ESP8266
+  Serial.begin(115200);
 
   delay(10);
+  autoMode = true;
+  autoState = 0;
+  studyIR = false;
+  studying = false;
+  irNum = preferences.getUShort("IRNum");
   if (restoreConfig()) {
     if (checkConnection()) {
       settingMode = false;
@@ -81,32 +103,176 @@ void setup() {
     }
   }
   settingMode = true;
-  autoMode = true;
-  autoState = 0;
   setupMode();
 }
 
 int loopCount = 0;
 
 void loop() {
-  if (!settingMode && loopCount > 5000) {
+  M5.update();
+  
+  //---界面切换---//
+  if (M5.BtnA.wasPressed()) {
+    studyIR = !studyIR;
+    studying = false;
+    if (studyIR) {
+      M5.Lcd.fillScreen(BLACK);
+      M5.Lcd.setCursor(0, 20);
+      M5.Lcd.setTextColor(WHITE);
+      M5.Lcd.setTextSize(3);
+      M5.Lcd.println(" Studying...");
+      M5.Lcd.printf(" Saved Number: %d", irNum);
+    }
+    else {
+      M5.Lcd.fillScreen(WHITE);
+      M5.Lcd.setCursor(0, 20);
+      M5.Lcd.setTextColor(BLACK);
+      M5.Lcd.setTextSize(3);
+      M5.Lcd.printf(" Enjoy");
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.printf("\n\n the Life.");
+      M5.Lcd.qrcode(WiFi.localIP().toString(), 160, 80, 160, 6);
+    }
+  }
+  
+  //---红外学习模式---//
+  if (studyIR) {
+    if (irrecv.decode(&results)) {
+      M5.Lcd.fillScreen(BLACK);
+      M5.Lcd.setCursor(0, 20);
+      M5.Lcd.setTextColor(WHITE);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.printf("IR signal detected!\n");
+      String description = IRAcUtils::resultAcToString(&results);
+      if (description.length()) {
+        M5.Lcd.printf("Description:\n");
+        M5.Lcd.print(description);
+      }
+      M5.Lcd.setTextSize(3);
+      M5.Lcd.printf("\nSave signal?");
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.setCursor(140, 210);
+      M5.Lcd.printf("Yes");
+      M5.Lcd.setCursor(230, 210);
+      M5.Lcd.printf("No");
+      studying = true;
+    }
+    if (studying) {
+      if (M5.BtnB.wasPressed()) {
+        irNum++;
+        String irName = "IR";
+        String irSizeName = "IRSize";
+        String irLengthName = "IRLength";
+        irName += irNum;
+        irSizeName += irNum;
+        irLengthName += irNum;
+        
+        preferences.putUShort("IRNum", irNum);
+
+        uint16_t irLength = getCorrectedRawLength(&results);
+        uint16_t *rawData = resultToRawArray(&results);
+        preferences.putBytes(irName.c_str(), rawData, irLength * sizeof(uint16_t));
+        
+        int irSize = (int)(preferences.getBytesLength(irName.c_str()));
+        preferences.putUShort(irSizeName.c_str(), irSize);
+        
+        preferences.putUShort(irLengthName.c_str(), irLength);
+
+//        Serial.println(irSize);
+//        Serial.println(preferences.getUShort(irSizeName.c_str()));
+//        Serial.println(preferences.getUShort(irLengthName.c_str()));
+//        uint16_t temp[irLength];
+//        preferences.getBytes(irName.c_str(), temp, irSize);
+//        for (int i = 0; i < irLength; i++) {
+//          Serial.printf("%d, ", temp[i]);
+//        }
+//        Serial.println("");
+//        for (int i = 0; i < irLength; i++) {
+//          Serial.printf("%d, ", rawData[i]);
+//        }
+//        Serial.println("");
+        
+        M5.Lcd.fillScreen(BLACK);
+        M5.Lcd.setCursor(0, 50);
+        M5.Lcd.setTextColor(WHITE);
+        M5.Lcd.setTextSize(3);
+        M5.Lcd.printf("  Data Saved as \n  Function%d", irNum);
+
+        delay(3000);
+        studying = false;
+        M5.Lcd.fillScreen(BLACK);
+        M5.Lcd.setCursor(0, 20);
+        M5.Lcd.setTextColor(WHITE);
+        M5.Lcd.setTextSize(3);
+        M5.Lcd.println(" Studying...");
+        M5.Lcd.printf(" Saved Number: %d", irNum);
+      }
+      if (M5.BtnC.wasPressed()) {
+        studying = false;
+        M5.Lcd.fillScreen(BLACK);
+        M5.Lcd.setCursor(0, 20);
+        M5.Lcd.setTextColor(WHITE);
+        M5.Lcd.setTextSize(3);
+        M5.Lcd.println(" Studying...");
+        M5.Lcd.printf(" Saved Number: %d", irNum);
+      }
+    }
+    else if (M5.BtnB.wasPressed()) {
+      for (int i = 1; i <= irNum; i++) {
+        String irName = "IR";
+        String irSizeName = "IRSize";
+        String irLengthName = "IRLength";
+        irName += i;
+        irSizeName += i;
+        irLengthName += i;
+        preferences.remove(irName.c_str());
+        preferences.remove(irSizeName.c_str());
+        preferences.remove(irLengthName.c_str());
+      }
+      preferences.remove("IRNum");
+      irNum = 0;
+      M5.Lcd.fillScreen(BLACK);
+      M5.Lcd.setCursor(0, 40);
+      M5.Lcd.setTextColor(WHITE);
+      M5.Lcd.setTextSize(3);
+      M5.Lcd.printf("  Reset Functions\n  Completed!");
+      delay(3000);
+      M5.Lcd.fillScreen(BLACK);
+      M5.Lcd.setCursor(0, 20);
+      M5.Lcd.setTextColor(WHITE);
+      M5.Lcd.setTextSize(3);
+      M5.Lcd.println(" Studying...");
+      M5.Lcd.printf(" Saved Number: %d", irNum);
+    }
+  }
+  
+  //---更新温度与模式显示---//
+  else if (!settingMode && loopCount > 8000) {
     if(autoMode && bme.begin(0x76)) {
       loopCount = 0;
       if (autoState != 2 && dht12.readTemperature() > 27) {
         irsend.sendRaw(powerOnData, 73, 38);
         autoState = 2;
+        M5.Lcd.fillRect(0, 120, 160, 100, WHITE);
       }
       if (autoState != 1 && dht12.readTemperature() < 25) {
         irsend.sendRaw(powerOffData, 73, 38);
         autoState = 1;
+        M5.Lcd.fillRect(0, 120, 160, 100, WHITE);
       }
-      M5.Lcd.fillRect(0, 120, 160, 100, WHITE);
       M5.Lcd.setCursor(40, 120);
       M5.Lcd.setTextColor(BLACK);
       M5.Lcd.setTextSize(4);
+      M5.Lcd.fillRect(40, 120, 120, 50, WHITE);
       M5.Lcd.printf("%d C\n", (int)(dht12.readTemperature()));
       M5.Lcd.setTextSize(2);
-      M5.Lcd.printf(" \n   Auto Mode");
+      M5.Lcd.printf(" \n   Auto Mode\n \n   Power ");
+      if (autoState == 2) {
+        M5.Lcd.printf("On");
+      }
+      else if (autoState == 1) {
+        M5.Lcd.printf("Off");
+      }
     }
     else {
       M5.Lcd.fillRect(0, 120, 160, 100, WHITE);
@@ -131,7 +297,8 @@ boolean restoreConfig() {
 
   if(wifi_ssid.length() > 0) {
     return true;
-} else {
+  }
+  else {
     return false;
   }
 }
@@ -236,7 +403,15 @@ void startWebServer() {
     M5.Lcd.printf("\n\n the Life.");
     M5.Lcd.qrcode(WiFi.localIP().toString(), 160, 80, 160, 6);
     webServer.on("/", []() {
-      String s = "<h1 style=\"text-align: center\">Connected!</h1><h3 style=\"text-align: center\"><a href=\"/poweron\">Power On</a></h3><h3 style=\"text-align: center\"><a href=\"/poweroff\">Power Off</a></h3><h3 style=\"text-align: center\"><a href=\"/automode\">Auto Mode</a></h3><p style=\"text-align: center\"><a href=\"/reset\">Reset WiFi</a></p>";
+      String s = "<h1 style=\"text-align: center\">Connected!</h1><h3 style=\"text-align: center\"><a href=\"/poweron\">Power On</a></h3><h3 style=\"text-align: center\"><a href=\"/poweroff\">Power Off</a></h3><h3 style=\"text-align: center\"><a href=\"/automode\">Auto Mode</a></h3>";
+      for (int i = 1; i <= irNum; i++) {
+        s += "<h3 style=\"text-align: center\"><a href=\"/function";
+        s += i;
+        s += "\">Function";
+        s += i;
+        s += "</a></h3>";
+      }
+      s += "<p style=\"text-align: center\"><a href=\"/reset\">Reset WiFi</a></p>";
       webServer.send(200, "text/html", makePage("M5GO", s));
     });
     webServer.on("/poweron", []() {
@@ -267,9 +442,33 @@ void startWebServer() {
         pixels.show(); 
       }
       autoMode = true;
-      String s = "<meta http-equiv=\"refresh\" content=\"1;url=http://192.168.137.18/\">";
+      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://192.168.137.18/\">";
       webServer.send(200, "text/html", makePage("M5GO", s));
     });
+    
+//    String functionUrlBase = "/function";
+//    for (int i = 1; i <= irNum; i++) {
+//      String functionUrl = functionUrlBase + i;
+//      webServer.on(functionUrl, [=]() {
+//        String irName = "IR";
+//        String irSizeName = "IRSize";
+//        String irLengthName = "IRLength";
+//        irName += i;
+//        irSizeName += i;
+//        irLengthName += i;
+//
+//        size_t dataSize = (size_t)(preferences.getInt(irSizeName.c_str()));
+//        
+//        uint16_t functionData[(size_t)(dataSize)];
+//        preferences.getBytes(irName.c_str(), functionData, dataSize);
+//        
+//        irsend.sendRaw(functionData, preferences.getUShort(irLengthName.c_str()), 38);
+//        
+//        String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://192.168.137.18/\">";
+//        webServer.send(200, "text/html", makePage("M5GO", s));
+//      });
+//    }
+    
     webServer.on("/reset", []() {
       // reset the wifi config
       preferences.remove("WIFI_SSID");
@@ -278,6 +477,39 @@ void startWebServer() {
       webServer.send(200, "text/html", makePage("Reset Wi-Fi Settings", s));
       delay(3000);
       ESP.restart();
+    });
+    
+    webServer.onNotFound([]() {
+      for (int i = 1; i <= irNum; i++) {
+        String uriTest = "/function";
+        uriTest += i;
+        if (webServer.uri() == uriTest)
+        {
+          String irName = "IR";
+          String irSizeName = "IRSize";
+          String irLengthName = "IRLength";
+          irName += i;
+          irSizeName += i;
+          irLengthName += i;
+
+          uint16_t irSize = preferences.getUShort(irSizeName.c_str());
+          Serial.println(irSize);
+
+          uint16_t irLength = preferences.getUShort(irLengthName.c_str());
+        
+          uint16_t functionData[irLength];
+          preferences.getBytes(irName.c_str(), functionData, irSize);
+          for (int i = 0; i < irLength; i++) {
+            Serial.printf("%d, ", functionData[i]);
+          }
+          Serial.println("");
+        
+          irsend.sendRaw(functionData, irLength, 38);
+          break;
+        }
+      }
+      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://192.168.137.18/\">";
+      webServer.send(200, "text/html", makePage("M5GO", s));
     });
   }
   webServer.begin();
