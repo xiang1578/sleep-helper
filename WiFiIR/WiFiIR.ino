@@ -116,12 +116,7 @@ void loop() {
     studyIR = !studyIR;
     studying = false;
     if (studyIR) {
-      M5.Lcd.fillScreen(BLACK);
-      M5.Lcd.setCursor(0, 20);
-      M5.Lcd.setTextColor(WHITE);
-      M5.Lcd.setTextSize(3);
-      M5.Lcd.println(" Studying...");
-      M5.Lcd.printf(" Saved Number: %d", irNum);
+      studyInterface();
     }
     else {
       M5.Lcd.fillScreen(WHITE);
@@ -200,21 +195,11 @@ void loop() {
 
         delay(3000);
         studying = false;
-        M5.Lcd.fillScreen(BLACK);
-        M5.Lcd.setCursor(0, 20);
-        M5.Lcd.setTextColor(WHITE);
-        M5.Lcd.setTextSize(3);
-        M5.Lcd.println(" Studying...");
-        M5.Lcd.printf(" Saved Number: %d", irNum);
+        studyInterface();
       }
       if (M5.BtnC.wasPressed()) {
         studying = false;
-        M5.Lcd.fillScreen(BLACK);
-        M5.Lcd.setCursor(0, 20);
-        M5.Lcd.setTextColor(WHITE);
-        M5.Lcd.setTextSize(3);
-        M5.Lcd.println(" Studying...");
-        M5.Lcd.printf(" Saved Number: %d", irNum);
+        studyInterface();
       }
     }
     else if (M5.BtnB.wasPressed()) {
@@ -237,12 +222,7 @@ void loop() {
       M5.Lcd.setTextSize(3);
       M5.Lcd.printf("  Reset Functions\n  Completed!");
       delay(3000);
-      M5.Lcd.fillScreen(BLACK);
-      M5.Lcd.setCursor(0, 20);
-      M5.Lcd.setTextColor(WHITE);
-      M5.Lcd.setTextSize(3);
-      M5.Lcd.println(" Studying...");
-      M5.Lcd.printf(" Saved Number: %d", irNum);
+      studyInterface();
     }
   }
   
@@ -282,6 +262,15 @@ void loop() {
   loopCount += 1;
 }
 
+void studyInterface() {
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setCursor(0, 20);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.println(" Studying...");
+  M5.Lcd.printf(" Saved Number: %d", irNum);
+}
+
 boolean restoreConfig() {
   wifi_ssid = preferences.getString("WIFI_SSID");
   wifi_password = preferences.getString("WIFI_PASSWD");
@@ -318,11 +307,11 @@ boolean checkConnection() {
       //M5.Lcd.println();
       Serial.println("Connected!");
       //M5.Lcd.println("Connected!");
-      M5.Lcd.fillScreen(BLACK);
-      M5.Lcd.setCursor(50, 100);
-      M5.Lcd.setTextColor(WHITE);
-      M5.Lcd.setTextSize(3);
-      M5.Lcd.printf("Connected!");
+//      M5.Lcd.fillScreen(BLACK);
+//      M5.Lcd.setCursor(50, 100);
+//      M5.Lcd.setTextColor(WHITE);
+//      M5.Lcd.setTextSize(3);
+//      M5.Lcd.printf("Connected!");
       return true;
     }
     delay(500);
@@ -422,7 +411,9 @@ void startWebServer() {
       }
       autoMode = false;
       autoState = 0;
-      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://192.168.137.18/\">";
+      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://";
+      s += WiFi.localIP().toString();
+      s += "\">";
       webServer.send(200, "text/html", makePage("M5GO", s));
     });
     webServer.on("/poweroff", []() {
@@ -433,7 +424,9 @@ void startWebServer() {
       }
       autoMode = false;
       autoState = 0;
-      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://192.168.137.18/\">";
+      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://";
+      s += WiFi.localIP().toString();
+      s += "\">";
       webServer.send(200, "text/html", makePage("M5GO", s));
     });
     webServer.on("/automode", []() {
@@ -442,7 +435,9 @@ void startWebServer() {
         pixels.show(); 
       }
       autoMode = true;
-      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://192.168.137.18/\">";
+      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://";
+      s += WiFi.localIP().toString();
+      s += "\">";
       webServer.send(200, "text/html", makePage("M5GO", s));
     });
     
@@ -508,7 +503,9 @@ void startWebServer() {
           break;
         }
       }
-      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://192.168.137.18/\">";
+      String s = "<meta http-equiv=\"refresh\" content=\"0;url=http://";
+      s += WiFi.localIP().toString();
+      s += "\">";
       webServer.send(200, "text/html", makePage("M5GO", s));
     });
   }
